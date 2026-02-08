@@ -48,7 +48,6 @@ export default function Map({ tasks, userLocation }) {
         console.error("Google Maps load error:", err);
       });
   }, [tasks, userLocation]);
-
   
 
   return <div ref={mapRef} style={{ width: "100%", height: "100%" }} />;
