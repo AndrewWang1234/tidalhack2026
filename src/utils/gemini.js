@@ -65,8 +65,8 @@ LOCATION NAMES (use specific searchable terms):
 - "HEB" → "HEB"
 - "Memorial Student Center" or "MSC" → "Memorial Student Center"  
 - "Evans Library" → "Evans Library"
-- "Starbucks" → "Starbucks Northgate" (more specific)
-- "coffee" → "Starbucks Northgate"
+- "Starbucks" → "Starbucks Coke Street"
+- "coffee" → "Starbucks Coke Street"
 - "mcdonald's" → "McDonald's University Drive"
 - "gym" → "Rec Center"
 - "post office" → "US Post Office College Station"

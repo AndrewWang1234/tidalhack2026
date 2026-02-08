@@ -3,40 +3,36 @@ import Map from "./components/Map";
 import { extractTasksFromText } from "./utils/gemini";
 import { resolveLocations } from "./utils/places";
 
-function createTimeAwareSchedule(tasks, route, userLocation, currentTime) {
-  const now = new Date(currentTime);
+function createTimeAwareSchedule(tasks, route) {
+  const BUFFER_MINUTES = 5; // arrive 5 mins early
   const schedule = [];
-  let currentDateTime = new Date(now);
 
   tasks.forEach((task, i) => {
     const leg = route.legs[i];
     const travelMinutes = Math.ceil(leg.duration.value / 60);
-    
-    // Add travel time
-    currentDateTime = new Date(currentDateTime.getTime() + travelMinutes * 60 * 1000);
-    
-    const startTime = new Date(currentDateTime);
-    const endTime = new Date(startTime.getTime() + task.durationMinutes * 60 * 1000);
-    
-    const scheduleItem = {
+
+    let departTime = null;
+    let arriveTime = null;
+
+    if (task.fixedTime && task.mustArriveBy) {
+      const mustArrive = new Date(task.mustArriveBy);
+      arriveTime = new Date(mustArrive.getTime() - BUFFER_MINUTES * 60 * 1000);
+      departTime = new Date(arriveTime.getTime() - travelMinutes * 60 * 1000);
+    }
+
+    schedule.push({
       taskId: task.id,
       title: task.title,
       address: task.address,
       lat: task.lat,
       lng: task.lng,
-      startTime,
-      endTime,
+      departTime,
+      arriveTime,
+      durationMinutes: task.durationMinutes || 30,
       travelMinutes,
       isFixed: task.fixedTime,
-    };
-    
-    if (task.fixedTime) {
-      scheduleItem.deadline = new Date(task.mustArriveBy);
-      scheduleItem.isLate = startTime > scheduleItem.deadline;
-    }
-    
-    schedule.push(scheduleItem);
-    currentDateTime = endTime;
+      deadline: task.fixedTime ? new Date(task.mustArriveBy) : null,
+    });
   });
 
   return schedule;
@@ -53,11 +49,6 @@ function App() {
   const [mapsLoaded, setMapsLoaded] = useState(false);
   const messagesEndRef = useRef(null);
 
-  const handleMapsReady = () => {
-  console.log("✓ Maps ready for use");
-  setMapsLoaded(true);
-};
-
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
@@ -72,7 +63,6 @@ function App() {
       setUserLocation({ lat: 30.6280, lng: -96.3344 });
     }
 
-    // Wait for Google Maps Places library to load
     const checkMapsLoaded = setInterval(() => {
       if (window.google?.maps?.places?.AutocompleteService) {
         setMapsLoaded(true);
@@ -83,50 +73,55 @@ function App() {
     return () => clearInterval(checkMapsLoaded);
   }, []);
 
-const handleRouteCalculated = (orderedTasks, route) => {
-  const newSchedule = createTimeAwareSchedule(orderedTasks, route, userLocation, new Date());
-  setSchedule(newSchedule);
+  const handleMapsReady = () => setMapsLoaded(true);
 
-const scheduleText = newSchedule
-  .map((s, i) => {
-    let statusIcon = "";
-    if (s.isFixed) {
-      const minutesBeforeDeadline = (s.deadline - s.startTime) / 60000;
-      if (s.isLate) {
-        statusIcon = "🔴 LATE";
-      } else if (minutesBeforeDeadline < 5) {
-        statusIcon = "🟡 TIGHT";
-      } else {
-        statusIcon = "🟢 ON TIME";
-      }
-    }
-    
-    const fixedLabel = s.isFixed 
-      ? `🔒 Must arrive by ${s.deadline.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}` 
-      : "";
-    
-    return `${i + 1}. ${statusIcon} ${s.title}\n   📍 ${s.address}\n   ⏰ Arrive: ${s.startTime.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}\n   🚗 ${s.travelMinutes} min travel${fixedLabel ? '\n   ' + fixedLabel : ''}`;
-  })
-  .join("\n\n");
-  
-  setMessages((prev) => [
-    ...prev, 
-    {
-      sender: "bot",
-      text:  `🗓️ Here's your optimized schedule:\n\n${scheduleText}`,
-    },
-  ]);
-  setIsLoading(false);
-};
+  const handleRouteCalculated = (orderedTasks, route) => {
+    const newSchedule = createTimeAwareSchedule(orderedTasks, route);
+    setSchedule(newSchedule);
+
+    const scheduleText = newSchedule
+      .map((s, i) => {
+        const statusIcon = s.isFixed
+          ? (s.arriveTime && s.deadline
+              ? (s.arriveTime > s.deadline ? "🔴 LATE" : (s.deadline - s.arriveTime) / 60000 < 5 ? "🟡 TIGHT" : "🟢 ON TIME")
+              : "")
+          : "";
+
+        const fixedLabel = s.isFixed && s.deadline
+          ? `🔒 Must arrive by ${s.deadline.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}`
+          : "";
+
+        const departLabel = s.departTime
+          ? `🚗 Depart: ${s.departTime.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })} (${s.travelMinutes} min travel)`
+          : "🚗 Depart whenever";
+
+        const arriveLabel = s.arriveTime
+          ? `📍 Arrive: ${s.arriveTime.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}`
+          : "";
+
+        return `${i + 1}. ${statusIcon} ${s.title}
+   📍 ${s.address}
+   ${departLabel}
+   ${arriveLabel}${fixedLabel ? '\n   ' + fixedLabel : ''}`;
+      })
+      .join("\n\n");
+
+    setMessages((prev) => [
+      ...prev,
+      { sender: "bot", text: `🗓️ Here's your optimized schedule:\n\n${scheduleText}` },
+    ]);
+
+    setIsLoading(false);
+  };
 
   const handleSend = async () => {
     if (input.trim() === "" || !userLocation) return;
 
     if (!mapsLoaded) {
       setMessages((prev) => [
-        ...prev, 
+        ...prev,
         { text: input, sender: "user" },
-        { text: "⏳ Please wait for maps to load...", sender: "bot" }
+        { text: "⏳ Please wait for maps to load...", sender: "bot" },
       ]);
       return;
     }
@@ -135,53 +130,35 @@ const scheduleText = newSchedule
     setIsLoading(true);
 
     try {
-      // Step 1: Extract tasks from natural language
-      const extractedTasks = await extractTasksFromText(
-        input,
-        userLocation, 
-        new Date().toISOString(),
-        allTasks
-      );
-      
-      console.log("Extracted tasks:", extractedTasks);
-      
-      if (extractedTasks.length === 0) {
+      const extractedTasks = await extractTasksFromText(input, userLocation, new Date().toISOString(), allTasks);
+      if (!extractedTasks.length) {
         setMessages((prev) => [...prev, { text: "❌ No tasks found in your message.", sender: "bot" }]);
         setIsLoading(false);
         return;
       }
 
-      // Step 2: Resolve locations using Google Geocoding
       setMessages((prev) => [...prev, { text: "🔍 Finding locations...", sender: "bot" }]);
-      
       const resolvedTasks = await resolveLocations(extractedTasks, userLocation);
-      
-      console.log("Resolved tasks:", resolvedTasks);
-
-      if (resolvedTasks.length === 0) {
+      if (!resolvedTasks.length) {
         setMessages((prev) => [
-          ...prev, 
-          { text: `❌ Could not find locations. Tried: ${extractedTasks.map(t => t.location).join(', ')}`, sender: "bot" }
+          ...prev,
+          { text: `❌ Could not find locations. Tried: ${extractedTasks.map(t => t.location).join(', ')}`, sender: "bot" },
         ]);
         setIsLoading(false);
         return;
       }
 
-      // Show which locations were found
       const foundLocations = resolvedTasks.map(t => `✓ ${t.location}`).join('\n');
       setMessages((prev) => {
-        // Remove the "Finding locations..." message
         const filtered = prev.filter(m => m.text !== "🔍 Finding locations...");
         return [...filtered, { text: `Found:\n${foundLocations}`, sender: "bot" }];
       });
 
-      // Step 3: Update state - this will trigger Map to re-optimize entire route
       setAllTasks(resolvedTasks);
       setTasks(resolvedTasks);
-
       setInput("");
     } catch (err) {
-      console.error("Error:", err);
+      console.error(err);
       setMessages((prev) => [...prev, { text: `❌ Error: ${err.message}`, sender: "bot" }]);
       setIsLoading(false);
     }
@@ -198,60 +175,100 @@ const scheduleText = newSchedule
     setMessages((prev) => [...prev, { text: "🗑️ Schedule cleared!", sender: "bot" }]);
   };
 
+  // **Cool modern styles**
+  const sidebarStyle = {
+    flex: "0 0 20%",
+    minWidth: "280px",
+    display: "flex",
+    flexDirection: "column",
+    background: "rgba(255,255,255,0.85)",
+    backdropFilter: "blur(10px)",
+    borderRight: "1px solid rgba(0,0,0,0.1)",
+    boxShadow: "2px 0 8px rgba(0,0,0,0.05)",
+  };
+
+  const headerStyle = {
+    padding: "1rem",
+    borderBottom: "1px solid rgba(0,0,0,0.05)",
+  };
+
+  const chatContainerStyle = {
+    flex: 1,
+    overflowY: "auto",
+    padding: "1rem",
+    display: "flex",
+    flexDirection: "column",
+    gap: "0.6rem",
+  };
+
+  const inputContainerStyle = {
+    padding: "1rem",
+    borderTop: "1px solid rgba(0,0,0,0.05)",
+    display: "flex",
+    gap: "0.5rem",
+  };
+
+  const inputStyle = {
+    flex: 1,
+    padding: "0.6rem 1rem",
+    borderRadius: "999px",
+    border: "1px solid #ccc",
+    outline: "none",
+    fontSize: "0.95rem",
+    boxShadow: "inset 0 2px 4px rgba(0,0,0,0.05)",
+  };
+
+  const buttonStyle = (enabled = true) => ({
+    padding: "0.6rem 1.2rem",
+    borderRadius: "999px",
+    border: "none",
+    background: enabled ? "#007bff" : "#6c757d",
+    color: "white",
+    cursor: enabled ? "pointer" : "not-allowed",
+    fontWeight: 500,
+    fontSize: "0.95rem",
+    boxShadow: enabled ? "0 4px 12px rgba(0,123,255,0.3)" : "none",
+    transition: "all 0.2s ease",
+  });
+
+  const messageStyle = (sender) => ({
+    padding: "0.6rem 1rem",
+    borderRadius: "16px",
+    maxWidth: "75%",
+    alignSelf: sender === "user" ? "flex-end" : "flex-start",
+    background: sender === "user" ? "linear-gradient(135deg, #a8edea, #fed6e3)" : "linear-gradient(135deg, #fbc2eb, #a6c1ee)",
+    color: "#333",
+    wordBreak: "break-word",
+    whiteSpace: "pre-wrap",
+    fontSize: "0.92rem",
+    boxShadow: "0 2px 6px rgba(0,0,0,0.1)",
+  });
+
   return (
-    
-    <div style={{ display: "flex", width: "100vw", height: "100vh" }}>
-      <div style={{ flex: "0 0 18%", minWidth: "220px", height: "100%", borderRight: "1px solid #ccc", display: "flex", flexDirection: "column", backgroundColor: "#f9f9f9" }}>
-        <div style={{ padding: "1rem", display: "flex", flexDirection: "column", gap: "0.5rem" }}>
-          <h2 style={{ margin: 0, fontSize: "1.2rem" }}>Smart Scheduler</h2>
-          <p style={{ margin: 0, fontSize: "0.75rem", color: "#666" }}>
-            AI-powered route planning with time constraints
-          </p>
+    <div style={{ display: "flex", width: "100vw", height: "100vh", fontFamily: "'Segoe UI', sans-serif" }}>
+      {/* Sidebar Chat */}
+      <div style={sidebarStyle}>
+        <div style={headerStyle}>
+          <h2 style={{ margin: 0, fontSize: "1.4rem", fontWeight: 600 }}>Smart Scheduler</h2>
+          <p style={{ margin: 0, fontSize: "0.85rem", color: "#555" }}>AI-powered route planning</p>
           {allTasks.length > 0 && (
-            <button
-              onClick={handleClearSchedule}
-              style={{
-                padding: "0.3rem 0.6rem",
-                fontSize: "0.75rem",
-                border: "none",
-                backgroundColor: "#dc3545",
-                color: "white",
-                borderRadius: "4px",
-                cursor: "pointer",
-              }}
-            >
-              Clear
+            <button onClick={handleClearSchedule} style={{ ...buttonStyle(true), marginTop: "0.5rem", backgroundColor: "#dc3545" }}>
+              Clear Schedule
             </button>
           )}
         </div>
 
-        <div style={{ flex: 1, overflowY: "auto", padding: "0.5rem 1rem", display: "flex", flexDirection: "column", gap: "0.5rem" }}>
-          {!mapsLoaded && (
-            <div style={{ padding: "0.5rem", backgroundColor: "#fff3cd", borderRadius: "8px", fontSize: "0.9rem" }}>
-              ⏳ Loading maps...
-            </div>
-          )}
+        <div style={chatContainerStyle}>
+          {!mapsLoaded && <div style={{ padding: "0.7rem", backgroundColor: "#fff3cd", borderRadius: "12px", fontSize: "0.9rem", textAlign: "center" }}>⏳ Loading maps...</div>}
           {messages.map((msg, idx) => (
-            <div
-              key={idx}
-              style={{
-                padding: "0.5rem",
-                backgroundColor: msg.sender === "user" ? "#d1e7dd" : "#f8d7da",
-                borderRadius: "8px",
-                wordBreak: "break-word",
-                alignSelf: msg.sender === "user" ? "flex-end" : "flex-start",
-                maxWidth: "80%",
-                whiteSpace: "pre-wrap",
-                fontSize: "0.9rem",
-              }}
-            >
+            <div key={idx} style={messageStyle(msg.sender)}>
               {msg.text}
             </div>
           ))}
           <div ref={messagesEndRef} />
         </div>
 
-        <div style={{ padding: "0.5rem 1rem 1rem 1rem", borderTop: "1px solid #ccc", display: "flex", gap: "0.5rem" }}>
+        <div style={inputContainerStyle}>
           <input
             type="text"
             value={input}
@@ -259,32 +276,17 @@ const scheduleText = newSchedule
             onKeyDown={handleKeyDown}
             placeholder={isLoading ? "Processing..." : mapsLoaded ? "Add or modify tasks..." : "Loading..."}
             disabled={isLoading || !mapsLoaded}
-            style={{ flex: 1, padding: "0.5rem", borderRadius: "5px", border: "1px solid #ccc" }}
+            style={inputStyle}
           />
-          <button
-            onClick={handleSend}
-            disabled={isLoading || !mapsLoaded}
-            style={{ 
-              padding: "0.5rem 1rem", 
-              border: "none", 
-              backgroundColor: isLoading || !mapsLoaded ? "#6c757d" : "#007bff", 
-              color: "white", 
-              borderRadius: "5px", 
-              cursor: isLoading || !mapsLoaded ? "not-allowed" : "pointer" 
-            }}
-          >
+          <button onClick={handleSend} disabled={isLoading || !mapsLoaded} style={buttonStyle(!(isLoading || !mapsLoaded))}>
             {isLoading ? "..." : "Send"}
           </button>
         </div>
       </div>
 
+      {/* Map Area */}
       <div style={{ flex: 1, height: "100%" }}>
-        <Map 
-  tasks={tasks} 
-  userLocation={userLocation} 
-  onRouteCalculated={handleRouteCalculated}
-  onMapsReady={handleMapsReady}
-/>
+        <Map tasks={tasks} userLocation={userLocation} onRouteCalculated={handleRouteCalculated} onMapsReady={handleMapsReady} />
       </div>
     </div>
   );
