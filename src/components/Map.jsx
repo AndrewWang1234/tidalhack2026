@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { setOptions, importLibrary } from "@googlemaps/js-api-loader";
+import { optimizeRouteWithFeatherless } from "../utils/routeOptimizer";
 
 const apiKey = import.meta.env.VITE_GOOGLE_MAPS_API_KEY;
 if (apiKey) {
@@ -101,17 +102,25 @@ export default function Map({ tasks = [], userLocation, onRouteCalculated, onMap
 
   // --- Main route calculation ---
   const calculateOptimalRoute = async () => {
+    if (!tasks || tasks.length === 0) return;
+
     try {
+      // 1️⃣ Send tasks to Featherless for optimized order
+      const optimizedTasks = await optimizeRouteWithFeatherless(tasks, userLocation);
+
+      console.log("Featherless optimized task order:", optimizedTasks.map(t => t.title));
+
+      // 2️⃣ Draw the optimized route
+      drawFinalRoute(optimizedTasks);
+    } catch (err) {
+      console.error("Route calculation error with Featherless AI:", err);
+
+      // Fallback to your current manual sorting if Featherless fails
       const fixedTasks = tasks.filter(t => t.fixedTime)
                               .sort((a, b) => new Date(a.mustArriveBy) - new Date(b.mustArriveBy));
       const flexibleTasks = tasks.filter(t => !t.fixedTime);
 
-      console.log("Fixed tasks:", fixedTasks.map(t => t.title));
-      console.log("Flexible tasks:", flexibleTasks.map(t => t.title));
-
       let orderedFlexible = flexibleTasks;
-
-      // Sort flexible tasks by proximity to last fixed task (or user location if no fixed tasks)
       if (flexibleTasks.length > 0) {
         const referencePoint = fixedTasks.length > 0 
           ? fixedTasks[fixedTasks.length - 1] 
@@ -124,14 +133,10 @@ export default function Map({ tasks = [], userLocation, onRouteCalculated, onMap
         );
       }
 
-      const finalOrder = [...fixedTasks, ...orderedFlexible];
-
-      console.log("Final task order:", finalOrder.map(t => t.title));
-      drawFinalRoute(finalOrder);
-    } catch (err) {
-      console.error("Route calculation error:", err);
+      drawFinalRoute([...fixedTasks, ...orderedFlexible]);
     }
   };
+
 
   // --- Draw the route on the map ---
   const drawFinalRoute = (orderedTasks) => {
