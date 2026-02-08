@@ -67,6 +67,12 @@ LOCATION NAMES (use specific searchable terms):
 - "Evans Library" → "Evans Library"
 - "Starbucks" → "Starbucks Northgate" (more specific)
 - "coffee" → "Starbucks Northgate"
+- "mcdonald's" → "McDonald's University Drive"
+- "gym" → "Rec Center"
+- "post office" → "US Post Office College Station"
+- "bank" → "Wells Fargo Bank"
+- "grocery store" → "HEB"
+- "pharmacy" → "CVS Pharmacy"
 
 EXAMPLE for input "I need to stop by HEB today, but I also need to get to the memorial student center by 9:40 PM and then the evans library at 10:30 PM":
 
